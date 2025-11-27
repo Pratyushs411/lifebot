@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, ChangeEvent } from "react";
+import { useState, ChangeEvent, FormEvent } from "react";
 
 const API_BASE = "http://localhost:8080";
 
@@ -23,13 +23,14 @@ export default function HomePage() {
   const [ai, setAi] = useState<AIResponse | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
+  const [patientName, setPatientName] = useState("");
 
+  // Upload PDF -> /upload-report
   const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     const formData = new FormData();
-    // IMPORTANT: must match backend: r.FormFile("file")
     formData.append("file", file);
 
     try {
@@ -44,7 +45,6 @@ export default function HomePage() {
 
       if (!res.ok) {
         const text = await res.text().catch(() => "");
-        console.error("Upload failed:", res.status, text);
         setUploadError(
           text || "Failed to upload PDF or get recommendations from backend."
         );
@@ -58,8 +58,41 @@ export default function HomePage() {
       setUploadError("Network error while uploading PDF.");
     } finally {
       setUploading(false);
-      // allow picking same file again
       e.target.value = "";
+    }
+  };
+
+  // Read Live Data -> /live-read (10s window)
+  const handleReadLive = async (e: FormEvent) => {
+    e.preventDefault();
+
+    try {
+      setUploading(true);
+      setUploadError("");
+      setAi(null);
+
+      const res = await fetch(`${API_BASE}/live-read`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ patientName }),
+      });
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        setUploadError(
+          text ||
+            "Failed to read live data. Make sure ESP-32 is connected and sending."
+        );
+        return;
+      }
+
+      const data: AIResponse = await res.json();
+      setAi(data);
+    } catch (err) {
+      console.error(err);
+      setUploadError("Network error while reading live data.");
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -72,24 +105,47 @@ export default function HomePage() {
             Lifebot Health Dashboard
           </h1>
           <p className="text-sm text-slate-400">
-            Upload a lab report PDF and see extracted health parameters and
+            Upload a lab report PDF or read live data from ESP-32 to get
             AI-based recommendations.
           </p>
         </header>
 
-        {/* Upload button */}
-        <div className="flex justify-center">
-          <label className="cursor-pointer rounded-full px-5 py-2 text-sm font-semibold bg-emerald-500 hover:bg-emerald-400 transition">
-            {uploading ? "Uploading & analysing..." : "Upload PDF"}
-            <input
-              type="file"
-              accept="application/pdf"
-              className="hidden"
-              onChange={handleFileChange}
+        {/* Patient name + buttons */}
+        <form
+          onSubmit={handleReadLive}
+          className="flex flex-col md:flex-row items-center justify-center gap-3"
+        >
+          <input
+            type="text"
+            value={patientName}
+            onChange={(e) => setPatientName(e.target.value)}
+            placeholder="Enter patient name"
+            className="w-full md:w-64 rounded-full px-4 py-2 text-sm bg-slate-900 border border-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          />
+
+          <div className="flex gap-3 flex-wrap justify-center">
+            {/* Upload PDF */}
+            <label className="cursor-pointer rounded-full px-5 py-2 text-sm font-semibold bg-emerald-500 hover:bg-emerald-400 transition">
+              {uploading ? "Working..." : "Upload PDF"}
+              <input
+                type="file"
+                accept="application/pdf"
+                className="hidden"
+                onChange={handleFileChange}
+                disabled={uploading}
+              />
+            </label>
+
+            {/* Read Live Data from ESP */}
+            <button
+              type="submit"
               disabled={uploading}
-            />
-          </label>
-        </div>
+              className="rounded-full px-5 py-2 text-sm font-semibold border border-slate-600 hover:bg-slate-800 transition disabled:opacity-50"
+            >
+              {uploading ? "Reading live (10s)..." : "Read Live Data (ESP-32)"}
+            </button>
+          </div>
+        </form>
 
         {uploadError && (
           <p className="text-xs text-red-400 text-center mt-1">{uploadError}</p>
@@ -99,16 +155,11 @@ export default function HomePage() {
         <section className="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 space-y-4">
           <div className="flex items-center justify-between gap-2">
             <h2 className="text-lg font-semibold">Patient & Parameters</h2>
-            {uploading && (
-              <span className="text-xs text-slate-400">
-                Analysing report with Gemini…
-              </span>
-            )}
           </div>
 
           {!ai && !uploading && (
             <p className="text-sm text-slate-400">
-              Upload a PDF report to extract patient name and lab values.
+              Upload a PDF or read live data to see patient values.
             </p>
           )}
 
@@ -119,7 +170,7 @@ export default function HomePage() {
                 <span className="font-semibold text-slate-300">
                   Patient Name:
                 </span>{" "}
-                {ai.patientName || "Not detected"}
+                {ai.patientName || patientName || "Not specified"}
               </div>
 
               {/* Parameters table */}
@@ -153,7 +204,7 @@ export default function HomePage() {
                 </div>
               ) : (
                 <p className="text-sm text-slate-400">
-                  No structured parameters detected from this report.
+                  No parameters available for this reading.
                 </p>
               )}
             </>
@@ -162,11 +213,12 @@ export default function HomePage() {
 
         {/* Recommendations card */}
         <section className="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 space-y-3">
-          <h2 className="text-lg font-semibold">Recommendations</h2>
+          <h2 className="text-lg font-semibold">AI Recommendations</h2>
 
           {!ai && !uploading && (
             <p className="text-sm text-slate-400">
-              Upload a report to see diet advice, doctor category and notes.
+              Upload a report or read live data to see diet advice, doctor
+              category and notes.
             </p>
           )}
 

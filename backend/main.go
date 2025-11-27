@@ -30,18 +30,14 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-// POST /upload-report
-// form-data:
-//
-//	file: <PDF file>
+// POST /upload-report -> PDF + Gemini (existing PDF flow)
 func uploadReportHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Limit + parse multipart form
-	if err := r.ParseMultipartForm(20 << 20); err != nil { // 20 MB
+	if err := r.ParseMultipartForm(20 << 20); err != nil {
 		http.Error(w, "Failed to parse form", http.StatusBadRequest)
 		return
 	}
@@ -55,7 +51,6 @@ func uploadReportHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Println("Uploaded file:", header.Filename)
 
-	// Read PDF into memory
 	pdfBytes, err := io.ReadAll(file)
 	if err != nil {
 		log.Println("Error reading PDF bytes:", err)
@@ -63,18 +58,16 @@ func uploadReportHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Call Gemini
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
 
 	rec, err := GetGeminiRecommendationsFromPDF(ctx, pdfBytes)
 	if err != nil {
-		log.Println("Gemini error:", err)
+		log.Println("Gemini PDF error:", err)
 		http.Error(w, "Failed to get recommendations from Gemini", http.StatusInternalServerError)
 		return
 	}
 
-	// Success → return GeminiRecommendation as JSON
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(rec)
 }
@@ -86,7 +79,6 @@ func withCORS(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 
-		// Preflight
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -99,8 +91,15 @@ func withCORS(next http.Handler) http.Handler {
 func main() {
 	mux := http.NewServeMux()
 
+	// Health check
 	mux.HandleFunc("/health", healthHandler)
+
+	// PDF upload -> Gemini
 	mux.HandleFunc("/upload-report", uploadReportHandler)
+
+	// ESP live data
+	mux.HandleFunc("/esp-sample", espSampleHandler) // POST from ESP-32
+	mux.HandleFunc("/live-read", liveReadHandler)   // POST from frontend
 
 	handler := withCORS(mux)
 
